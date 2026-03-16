@@ -1,0 +1,7 @@
+services:
+  monitor-agent:
+    build: .
+    container_name: monitor-agent
+    restart: unless-stopped
+    env_file:
+      - .env

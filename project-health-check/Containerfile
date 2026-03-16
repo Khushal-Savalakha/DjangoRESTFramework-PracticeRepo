@@ -1,0 +1,33 @@
+###########################
+# Stage 1: Build Stage
+###########################
+FROM python:3.10-alpine AS builder
+
+RUN apk add --no-cache \
+    build-base \
+    mariadb-dev \
+    musl-dev \
+    nano \
+    pkgconfig
+
+COPY requirements.txt .
+
+RUN pip install --user --no-cache-dir -r requirements.txt
+
+###########################
+# Stage 2: Final Stage
+###########################
+FROM python:3.10-alpine AS main
+
+WORKDIR /app
+
+RUN apk add --no-cache mariadb-connector-c
+
+COPY --from=builder /root/.local /root/.local
+
+ENV PATH="/root/.local/bin:$PATH"
+
+COPY . .
+
+RUN rm -rf staticfiles/* \
+    && python manage.py collectstatic --noinput
