@@ -1,0 +1,184 @@
+pipeline {
+   agent any
+
+   stages {
+      stage('Setup') {
+         steps {
+            script {
+               echo "=========================================="
+               echo "DEPLOYMENT SETUP"
+               echo "=========================================="
+
+               if (params.ENVIRONMENT == "PRODUCTION") {
+                  env.SSH_HOST = params.SSH_HOST_PROD
+                  env.SSH_USER = params.SSH_USER_PROD
+                  env.SSH_PASSWORD = params.SSH_PASSWORD_PROD
+                  env.SOURCE_ROOT_PATH = params.SOURCE_ROOT_PATH_PROD
+                  env.EXECUTION_FILE = params.EXECUTION_FILE_PROD
+               } else {
+                  env.SSH_HOST = params.SSH_HOST_DEV
+                  env.SSH_USER = params.SSH_USER_DEV
+                  env.SSH_PASSWORD = params.SSH_PASSWORD_DEV
+                  env.SOURCE_ROOT_PATH = params.SOURCE_ROOT_PATH_DEV
+                  env.EXECUTION_FILE = params.EXECUTION_FILE_DEV
+               }
+
+               echo "Environment: ${params.ENVIRONMENT}"
+               echo "Branch: ${params.BRANCH_NAME}"
+               echo "Host: ${env.SSH_HOST}"
+               echo "User: ${env.SSH_USER}"
+               echo "Path: ${env.SOURCE_ROOT_PATH}"
+               echo "=========================================="
+            }
+         }
+      }
+
+      stage('Checkout Code') {
+         steps {
+            script {
+            def now = new Date().format(
+               "EEEE, yyyy-MM-dd HH:mm:ss",
+               TimeZone.getTimeZone('Asia/Kolkata')
+            )
+         slackSend(
+            channel: '#Test-app-build',
+            message: """🚀 *Build Started*
+         • *Project:* Test App Backend
+         • *Environment:* ${params.ENVIRONMENT}
+         • *Branch:* ${params.BRANCH_NAME}
+         • *Build #:* ${env.BUILD_NUMBER}
+         • *Time:* ${now}
+         """.stripIndent()
+         )
+               echo "Checking out branch: ${params.BRANCH_NAME}"
+               git branch: "${params.BRANCH_NAME}",
+                  credentialsId: "${params.CREDENTIALS_ID}",
+                  url: "${params.REPO_URL}"
+            }
+         }
+      }
+
+      stage('Prepare Environment') {
+         steps {
+            sh '''
+            echo "Installing required packages..."
+            apt-get update -qq
+            apt-get install -y git sshpass openssh-client curl
+            echo "Packages installed successfully"
+            '''
+         }
+      }
+
+      stage('Deploy to Server') {
+         steps {
+            script {
+               echo "=========================================="
+               echo "DEPLOYING TO ${params.ENVIRONMENT}"
+               echo "=========================================="
+            }
+            sh '''
+            sshpass -p "${SSH_PASSWORD}" ssh -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} "
+               set -e
+               echo '1. Navigating to project directory...'
+               cd ${SOURCE_ROOT_PATH}
+
+               echo '2. Fetching latest changes from Git...'
+               git fetch --all
+
+               echo '3. Checking out branch: ${BRANCH_NAME}'
+               git checkout ${BRANCH_NAME}
+
+               echo '4. Pulling latest code... ${BRANCH_NAME}'
+               git pull origin ${BRANCH_NAME}
+
+               echo '5. Making deployment script executable...'
+               chmod +x ${EXECUTION_FILE}
+
+               echo '6. Running deployment script...'
+               ./${EXECUTION_FILE}
+
+               echo '✅ Deployment script completed'
+            "
+            '''
+         }
+      }
+
+      stage('Verify Deployment') {
+         steps {
+            script {
+               echo "Verifying deployment..."
+               sh '''
+               sshpass -p "${SSH_PASSWORD}" ssh -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} "
+                  cd ${SOURCE_ROOT_PATH}
+                  echo 'Container Status:'
+                  docker compose ps
+               "
+               '''
+            }
+         }
+      }
+   }
+
+   post {
+      success {
+         script {
+            def now = new Date().format(
+               "EEEE, yyyy-MM-dd HH:mm:ss",
+               TimeZone.getTimeZone('Asia/Kolkata')
+            )
+
+            currentBuild.displayName = "#${env.BUILD_NUMBER} - ${params.ENVIRONMENT} ✅"
+            currentBuild.description = "Branch: ${params.BRANCH_NAME} | Time: ${now}"
+
+            echo "=========================================="
+            echo "✅ DEPLOYMENT SUCCESSFUL!"
+            echo "Environment: ${params.ENVIRONMENT}"
+            echo "Branch: ${params.BRANCH_NAME}"
+            echo "Time: ${now}"
+            echo "=========================================="
+            slackSend(
+               channel: '#Test-app-build',
+               message: """✅ *Build & Deployment Successfull!*
+               • *Project:* Test App Backend
+               • *Environment:* ${params.ENVIRONMENT}
+               • *Branch:* ${params.BRANCH_NAME}
+               • *Build #:* ${env.BUILD_NUMBER}
+               • *Time:* ${now}
+               """
+            )
+         }
+      }
+      failure {
+         script {
+            def now = new Date().format(
+               "EEEE, yyyy-MM-dd HH:mm:ss",
+               TimeZone.getTimeZone('Asia/Kolkata')
+            )
+            
+            currentBuild.displayName = "#${env.BUILD_NUMBER} - ${params.ENVIRONMENT} ❌"
+            currentBuild.description = "Branch: ${params.BRANCH_NAME} | FAILED | Time: ${now}"
+
+            echo "=========================================="
+            echo "❌ DEPLOYMENT FAILED!"
+            echo "Environment: ${params.ENVIRONMENT}"
+            echo "Branch: ${params.BRANCH_NAME}"
+            echo "Time: ${now}"
+            echo "Check console output for details"
+            echo "=========================================="
+            slackSend(
+               channel: '#Test-app-build',
+               message: """❌ *Build Failed!*
+               • *Project:* Test App Backend
+               • *Environment:* ${params.ENVIRONMENT}
+               • *Branch:* ${params.BRANCH_NAME}
+               • *Build #:* ${env.BUILD_NUMBER}
+               • *Time:* ${now}
+               """
+            )
+         }
+      }
+      always {
+         cleanWs()
+      }
+   }
+}
